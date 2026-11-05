@@ -10,8 +10,13 @@ import pdfplumber
 # Load environment variables
 load_dotenv()
 
-# Configure Google Gemini AI
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not GOOGLE_API_KEY:
+    st.error("Google Gemini API key is missing. Please configure GOOGLE_API_KEY in Render.")
+    st.stop()
+
+genai.configure(api_key=GOOGLE_API_KEY)
 
 # Function to extract text from PDF
 def extract_text_from_pdf(pdf_path):
