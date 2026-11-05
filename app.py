@@ -1,195 +1,144 @@
 
 import os
+import io
+import time
 import streamlit as st
-from dotenv import load_dotenv
-from google import genai
-from pdf2image import convert_from_path
-import pytesseract
 import pdfplumber
+import pytesseract
+from dotenv import load_dotenv
+from pdf2image import convert_from_bytes
+from google import genai
+from google.genai import errors
 
-# Load environment variables
 load_dotenv()
+st.set_page_config(page_title="AI Resume Analyzer", page_icon="📄", layout="wide")
 
-# Configure Gemini API
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+MODEL_NAME = "gemini-3.8-flash"
 
 if not GOOGLE_API_KEY:
-    st.error("Google Gemini API key is missing. Configure it in Render.")
+    st.error("Google Gemini API key is missing. Configure GOOGLE_API_KEY in Render.")
     st.stop()
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
-
-# Extract text from PDF
-def extract_text_from_pdf(pdf_path):
-
-    text = ""
-
+def extract_resume_text(pdf_file):
+    pdf_bytes = pdf_file.getvalue()
+    extracted_text = ""
     try:
-        with pdfplumber.open(pdf_path) as pdf:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
-
                 if page_text:
-                    text += page_text + "\n"
-
-        if text.strip():
-            return text.strip()
-
+                    extracted_text += page_text + "\n"
+        if len(extracted_text.strip()) < 50:
+            st.info("Scanned PDF detected. Performing OCR...")
+            images = convert_from_bytes(pdf_bytes)
+            extracted_text = ""
+            for image in images:
+                extracted_text += pytesseract.image_to_string(image) + "\n"
+        if not extracted_text.strip():
+            raise ValueError("No readable text found in the PDF.")
+        return extracted_text
     except Exception as e:
-        st.warning(f"Direct PDF extraction failed: {e}")
+        raise Exception(f"PDF extraction failed: {str(e)}")
 
-    # OCR fallback
-    try:
-        images = convert_from_path(pdf_path)
-
-        for image in images:
-            page_text = pytesseract.image_to_string(image)
-            text += page_text + "\n"
-
-    except Exception as e:
-        st.error(f"OCR failed: {e}")
-
-    return text.strip()
-
-
-# Analyze resume using Gemini
-def analyze_resume(resume_text, job_description=None):
-
-    if not resume_text:
-        return "Resume text is required for analysis."
-
+def analyze_resume(resume_text, job_description):
     prompt = f"""
-    You are an experienced technical HR professional.
+You are an experienced technical recruiter and professional resume evaluator.
 
-    Analyze the candidate's resume for suitable roles such as:
+RESUME:
+{resume_text}
 
-    Data Scientist, Data Analyst, Machine Learning Engineer,
-    AI Engineer, Software Developer, DevOps Engineer,
-    Full Stack Developer and other relevant technical roles.
+JOB DESCRIPTION:
+{job_description}
 
-    Provide the following:
+Analyze the resume against the job description and provide:
 
-    1. Overall resume evaluation.
-    2. Suitable job roles.
-    3. Existing technical skills.
-    4. Strengths of the candidate.
-    5. Weaknesses and missing skills.
-    6. Skills to improve.
-    7. Recommended courses.
-    8. Resume improvement suggestions.
+1. Resume Summary
+2. Job Match Percentage with explanation
+3. Matching Technical and Soft Skills
+4. Missing Skills
+5. Candidate Strengths
+6. Weaknesses and Improvement Areas
+7. Project Evaluation
+8. Education and Experience Evaluation
+9. Specific Resume Improvement Suggestions
+10. Ten Relevant Technical and HR Interview Questions
 
-    Resume:
-    {resume_text}
-    """
+Be realistic and objective. Do not invent qualifications or experience.
+Use clear headings and bullet points.
+"""
+    for attempt in range(4):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt
+            )
+            if not response.text:
+                raise ValueError("Gemini returned an empty response.")
+            return response.text
+        except errors.APIError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                time.sleep(5 * (2 ** attempt))
+            else:
+                raise
+    raise Exception("Gemini could not complete the analysis. Please try again later.")
 
-    if job_description:
-
-        prompt += f"""
-
-        Compare the resume with the following job description.
-
-        Job Description:
-        {job_description}
-
-        Provide:
-
-        1. Matching skills.
-        2. Missing skills.
-        3. Job requirements satisfied.
-        4. Areas requiring improvement.
-        5. Overall job suitability.
-
-        """
-
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt
-    )
-
-    return response.text or "No analysis generated."
-
-
-# Streamlit application
-st.set_page_config(
-    page_title="Resume Analyzer",
-    layout="wide"
-)
-
-st.title("AI Resume Analyzer")
-
-st.write(
-    "Analyze your resume and match it with job descriptions "
-    "using Google Gemini AI."
-)
+st.title("📄 AI Resume Analyzer")
+st.write("Upload your resume and enter a job description to receive an AI-powered resume evaluation.")
+st.divider()
 
 col1, col2 = st.columns(2)
 
 with col1:
-    uploaded_file = st.file_uploader(
-        "Upload your resume (PDF)",
-        type=["pdf"]
-    )
+    st.subheader("Upload Resume")
+    uploaded_file = st.file_uploader("Upload your resume in PDF format", type=["pdf"])
 
 with col2:
+    st.subheader("Job Description")
     job_description = st.text_area(
-        "Enter Job Description:",
-        placeholder="Paste the job description here..."
+        "Paste the job description here",
+        height=250,
+        placeholder="Enter the job requirements and responsibilities..."
     )
 
+st.divider()
 
-if uploaded_file is not None:
+if st.button("🚀 Analyze Resume", use_container_width=True):
+    if uploaded_file is None:
+        st.warning("Please upload your resume PDF.")
+    elif not job_description.strip():
+        st.warning("Please enter the job description.")
+    else:
+        try:
+            with st.spinner("Extracting resume information..."):
+                resume_text = extract_resume_text(uploaded_file)
+            with st.spinner("Analyzing resume using Gemini AI..."):
+                analysis = analyze_resume(resume_text, job_description)
+            st.success("Resume analysis completed successfully!")
+            st.subheader("📊 Resume Analysis Results")
+            st.markdown(analysis)
+            st.download_button(
+                "📥 Download Analysis",
+                data=analysis,
+                file_name="resume_analysis.txt",
+                mime="text/plain"
+            )
+        except errors.APIError as e:
+            if e.code == 503:
+                st.error("Gemini servers are experiencing high demand. Please try again later.")
+            elif e.code == 429:
+                st.error("Gemini API quota or rate limit reached. Check your API usage.")
+            elif e.code == 403:
+                st.error("API access denied. Check your Google Cloud project status.")
+            else:
+                st.error(f"Gemini API Error: {e}")
+        except Exception as e:
+            st.error(f"Analysis failed: {str(e)}")
 
-    st.success("Resume uploaded successfully!")
-
-    if st.button("Analyze Resume"):
-
-        with st.spinner("Analyzing your resume..."):
-
-            try:
-                # Save uploaded PDF temporarily
-                with open("uploaded_resume.pdf", "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-
-                # Extract resume text
-                resume_text = extract_text_from_pdf(
-                    "uploaded_resume.pdf"
-                )
-
-                if not resume_text:
-                    st.error(
-                        "Could not extract text from the PDF. "
-                        "Please upload another PDF."
-                    )
-
-                else:
-                    # Analyze using Gemini
-                    analysis = analyze_resume(
-                        resume_text,
-                        job_description
-                    )
-
-                    st.success("Analysis completed!")
-
-                    st.subheader("Resume Analysis")
-
-                    st.markdown(analysis)
-
-            except Exception as e:
-                st.error(f"Analysis failed: {e}")
-
-else:
-    st.warning("Please upload a resume in PDF format.")
-
-
-# Footer
-st.markdown("---")
-
+st.divider()
 st.markdown(
-    """
-    <p style='text-align: center;'>
-    Powered by <b>Streamlit</b> and <b>Google Gemini AI</b>
-    </p>
-    """,
+    "<center>Developed using Python, Streamlit and Google Gemini AI</center>",
     unsafe_allow_html=True
 )
