@@ -3,15 +3,17 @@ import os
 import io
 import streamlit as st
 import pdfplumber
-import pytesseract
 from dotenv import load_dotenv
-from pdf2image import convert_from_bytes
 from google import genai
 from google.genai import types, errors
 
 # Configuration
 load_dotenv()
-st.set_page_config(page_title="AI Resume Analyzer", page_icon="📄", layout="wide")
+st.set_page_config(
+    page_title="AI Resume Analyzer",
+    page_icon="📄",
+    layout="wide"
+)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 MODEL_NAME = "gemini-3.8-flash"
@@ -28,26 +30,19 @@ client = genai.Client(
 
 # Extract text from PDF
 def extract_resume_text(pdf_file):
-    pdf_bytes = pdf_file.getvalue()
     extracted_text = ""
 
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
                     extracted_text += page_text + "\n"
 
-        if len(extracted_text.strip()) < 50:
-            st.info("Scanned PDF detected. Performing OCR...")
-            images = convert_from_bytes(pdf_bytes, dpi=150)
-            extracted_text = ""
-
-            for image in images:
-                extracted_text += pytesseract.image_to_string(image) + "\n"
-
         if not extracted_text.strip():
-            raise ValueError("No readable text found in the PDF.")
+            raise ValueError(
+                "No readable text found. Please upload a text-based PDF."
+            )
 
         return extracted_text
 
@@ -57,7 +52,7 @@ def extract_resume_text(pdf_file):
 # Analyze resume using Gemini
 def analyze_resume(resume_text, job_description):
     prompt = f"""
-You are an experienced technical recruiter and professional resume evaluator.
+You are an experienced technical recruiter and resume evaluator.
 
 Analyze the candidate's resume against the job description.
 
@@ -77,7 +72,7 @@ Provide the following analysis:
 6. Weaknesses and Improvement Areas
 7. Project Evaluation
 8. Education and Experience Evaluation
-9. Specific Resume Improvement Suggestions
+9. Resume Improvement Suggestions
 10. Ten Relevant Technical and HR Interview Questions
 
 Instructions:
@@ -105,19 +100,33 @@ Instructions:
 
     except errors.APIError as e:
         if e.code == 503:
-            raise Exception("Gemini is currently experiencing high demand. Please try again later.")
+            raise Exception(
+                "Gemini is experiencing high demand. Please try again later."
+            )
         elif e.code == 429:
-            raise Exception("API quota or rate limit reached. Check your Gemini API usage.")
+            raise Exception(
+                "Gemini API quota or rate limit reached. Check your API usage."
+            )
         elif e.code == 403:
-            raise Exception("API access denied. Check your Google Cloud project status.")
+            raise Exception(
+                "API access denied. Check your Google Cloud project status."
+            )
         elif e.code == 404:
-            raise Exception("Model not found or unavailable. Check the model name in AI Studio.")
+            raise Exception(
+                "Gemini model not found or unavailable. Check the model name."
+            )
         else:
             raise Exception(f"Gemini API error ({e.code}): {e.message}")
 
+    except Exception as e:
+        raise Exception(f"Gemini analysis failed: {e}")
+
 # Application interface
 st.title("📄 AI Resume Analyzer")
-st.write("Upload your resume and enter a job description to receive an AI-powered resume evaluation.")
+st.write(
+    "Upload your resume and enter a job description "
+    "to receive an AI-powered resume evaluation."
+)
 st.divider()
 
 col1, col2 = st.columns(2)
@@ -156,7 +165,10 @@ if st.button("🚀 Analyze Resume", use_container_width=True):
                 st.write("Step 2: Preparing resume and job description...")
                 st.write("Step 3: Sending request to Gemini AI...")
 
-                analysis = analyze_resume(resume_text, job_description)
+                analysis = analyze_resume(
+                    resume_text,
+                    job_description
+                )
 
                 status.update(
                     label="Resume analysis completed!",
